@@ -7,7 +7,7 @@ This document describes the persistent storage implementation for the dbsp runti
 At the lowest level of DBSP, state is stored in two data-structures which both represent (ordered) sets of keys and for
 every key, potentially a set of values (OrderedLayer) or a weight (ColumnLayer):
 
-* ColumnLayer: The column-layer holds a key with a weight. The in-memory implementation implements uses two equal-length
+* ColumnLayer: The column-layer holds a key with a weight. The in-memory implementation uses two equal-length
   vectors for keys and weights.
 * OrderedLayer: The ordered-layer holds key and a set of values per key. The in-memory representation uses a vector for
   keys, a vector for offsets (start/end of values for each key in values), and values -- which is again either an
