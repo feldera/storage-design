@@ -77,7 +77,7 @@ There are three reasonable ways to inject persistence in dbsp:
    responsible to store them. As discussed earlier the spine is essentially a KV-store (structured as an LSM tree). 
    So the spine would be  responsible to store the batches on a disk and  merge batches etc. The reader will note 
    that this closely resembles what existing LSM-based KV-stores (e.g., rocksdb) already do.
-2. Bottom-up: The OrderedLayer and ColumLayer are replaced with persistent equivalents that no longer hold the entire
+2. Bottom-up: The OrderedLayer and ColumnLayer are replaced with persistent equivalents that no longer hold the entire
    vectors in memory (but only parts currently/recently used).
 3. Have a single data-lake that is mostly decoupled from the (in-memory) dbsp. During pre-processing operators prefetch
    all necessary keys from the data-lake which then gets manifested as a set of batches in dbsp. This is similar to
