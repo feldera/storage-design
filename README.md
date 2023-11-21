@@ -15,7 +15,7 @@ every key, potentially a set of values (OrderedLayer) or a weight (ColumnLayer):
 
 These two low-level constructs are then used to build the "middle-layer" data-structures which store state:
 
-* OrdIndexZSet (OrderedLayer<K, ColumnLayer<V, R>, O>)
+* OrdIndexedZSet (OrderedLayer<K, ColumnLayer<V, R>, O>)
 * OrdKeyBatch (OrderedLayer<K, ColumnLayer<T, R>, O>)
 * OrdValBatch (OrderedLayer<K, OrderedLayer<V, ColumnLayer<T, R>, O>, O>)
 * OrdZSet (ColumnLayer<K, R>)
@@ -288,7 +288,7 @@ index to minimize disk access). While there might be some re-use of the existing
 need to work with a limited amount of data-blocks in memory at any time which is something the current code doesn't
 consider.
 
-### The Ord family (OrdIndexZSet, OrdKeyBatch, OrdValBatch, OrdZSet)
+### The Ord family (OrdIndexedZSet, OrdKeyBatch, OrdValBatch, OrdZSet)
 
 This will be the part that we get almost for free if we have the persistent layers because we can probably "just" use
 the DRAM implementation. However, here as well we will encounter are a few things that won't fit with persistence (like
