@@ -99,7 +99,7 @@ We describe the design for the persistence layer in a bottom-up fashion, focusin
 We need to be able to store ColumnLayers and OrderedLayers on disk, so we need a data-format to represent them. Each
 layer can just store data in a file, which means an OrderedLayer will use at least two files: one for keys and
 offsets and one (or more) for the value layer(s). Instead of two separate vectors (byte arrays on files) to store the
-weights (ColumnLayer) or offsets (OrderdLayer) we will just store the (k,r) and (k1,o1) pairs together as a single
+weights (ColumnLayer) or offsets (OrderedLayer) we will just store the (k,r) and (k1,o1) pairs together as a single
 vector (this simplifies lookup and reduces the amount of IO).
 
 The file itself is organized in a header, a metadata section and `n` data sections (holding either OrderedLayer or
