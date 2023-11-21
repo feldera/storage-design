@@ -256,7 +256,7 @@ There are a few ways to implement this:
 
 The next step is to implement the persistent version of the OrderedLayer and ColumnLayer. While the logic of these
 can closely resemble the in-memory versions, the important difference is that we can no longer store the entire
-data-set memory. Instead, we need to store the data on disk and only load parts of it into memory when needed. This
+data-set in memory. Instead, we need to store the data on disk and only load parts of it into memory when needed. This
 can be done by interacting with the storage engine described above.
 
 The persistent versions of the layers will need to implement the following APIs to match the DRAM functionality:
