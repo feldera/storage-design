@@ -314,19 +314,72 @@ changes such that they can be check-pointed.
 While the previous sections focused on the storage layer functionality, in order to have a complete system
 we need a control plane API. This includes: 
 
-#### Data Consistency, Checkpoints & Distribution
+#### Data Consistency
+
+There are two entities that we are interested in persisting. Note that we first consider the single-node case,
+and then add the extra consistency requirements in presence of multiple workers.
+
+The first one is the batch. The batch is immutable, so we can just write it to disk and ensure (using fsync)
+that it has been fully written out to disk. If we crash during writing a batch we may end up with a partially
+written batch. However, this is not a problem for consistency as long as we never add a batch to a spine
+that has not been fully written (with fsync) to disk. Having partial batches on disk may be a problem
+as we potentially need to garbage collect them if we crash during writing one. Note that looking at checkpoints won't
+be enough for garbage collection as we can potentially have a fully written batch that just hasn't been added to a spine
+yet if we crash in-between the two operations. Another way to avoid the garbage collection would be to have e.g.,
+incremental file-names for batches such that we naturally overwrite a partial/incomplete batch in a restart.
+
+The second object is the spine, the spine is mutable over time and logically (for consistency) we can think of it as 
+just a bag of batches and operations to add and remove batches from the spine. We can durably persist the spine (bag of
+batches) to the disk as a separate file and ensure that it has been fully written out to disk (by writing to a 
+temporary file first + fsync + rename with old file which is atomic). This avoids the problem of having partially 
+written spine meta-data. However, this is not enough since we have many spines in a dbsp program, and we 
+need to have the dbsp entire state which includes all spines in a consistent state. 
+
+There are different ways to solve this problem:
+
+##### With a log
+
+- The modifications to spines happen during a transaction.
+- Whenever we add or remove a batch to a spine, we also log it as an entry to an undo log.
+- When we commit, we clear the undo log, and in addition we can remove any batch files we now no longer need (e.g., 
+  because they got merged into a new badge).
+- If we need to rollback/or recover after crash we read the undo log and undo all changes to the spines (e.g., remove 
+  batches that got added and add batches that got removed).
+
+##### Using Timestamps
+
+- The modifications to spines happen during a transaction
+- We store the `earliest` and `last` timestamp (e.g., incrementing transaction id) for each batch
+- We set `earliest` of every incoming batch to the current timestamp (and `last` to nil)
+- on a merge, the timestamp of the new batch becomes `earliest` = current timestamp
+- the timestamp of the older two batches becomes `last` = current timestamp-1
+- When we commit, we store the timestamp of the commit as a checkpoint
+- When we need to rollback/or recover after a crash we read timestamp for each batch in a spine and remove all batches 
+  that have `earliest` timestamp larger than the checkpoint timestamp.
+- We can remove all batches where `last` is smaller than the last checkpoint we need
+- We also need to make sure we don't merge any batches across commits.
+
+This is similar to the log approach, but we don't need to store the undo log as we can just use the timestamps to
+figure out which batches to remove. While we can write e.g., earliest as part of writing the batch, I'm not sure
+how/where we write the `last` timestamp (@Leonid).
+
+One of the control plane APIs will be a transaction API to ensure consistency of all DBSP Spine (and Layer) state. 
+Another API will be added to restore to a previous checkpoint.
+
+##### Data consistency for Distributed dbsp
 
 The requirements for consistency in presence of multiple workers are 
 [slightly different than for a single worker](https://github.com/feldera/dist-design/blob/main/rocksdb.md#coordinated-commit). 
 In essence: a worker needs to be able to participate in a distributed commit protocol to ensure that all workers 
 have the same view of the data. If one of the workers abort, all clients need to revert to the previous checkpoint.
 
-The easiest way to support this is likely with a global undo-log for all spines on a worker. The log stores all layers 
-that got introduced to spines and all merges. An undo-log will remove layers from spines and revert merges (by 
-keeping the previous data files around until the checkpoint is no longer reachable).
+In both cases discussed above we can ensure to revert to an earlier point even in the presence of already committed
+transaction:
 
-One of the control plane APIs will be a transaction API which commits modification of all DBSP Spine and Layer state
-to disk. Another API will be added to restore to a previous checkpoint.
+- For the undo log the worker can just keep the undo log for every transaction around that we want to be able to 
+  revert to.
+- For the timestamp approach there is no need to do anything (aside from making sure we don't remove batches too
+  early)
 
 #### Getting more parallelism for the disks
 
