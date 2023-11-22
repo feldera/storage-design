@@ -323,17 +323,17 @@ The first one is the batch. The batch is immutable, so we can just write it to d
 that it has been fully written out to disk. If we crash during writing a batch we may end up with a partially
 written batch. However, this is not a problem for consistency as long as we never add a batch to a spine
 that has not been fully written (with fsync) to disk. Having partial batches on disk may be a problem
-as we potentially need to garbage collect them if we crash during writing one. Note that looking at checkpoints won't
+as we potentially need to garbage collect them if we crash during writing one. Note that looking at checksums won't
 be enough for garbage collection as we can potentially have a fully written batch that just hasn't been added to a spine
-yet if we crash in-between the two operations. Another way to avoid the garbage collection would be to have e.g.,
-incremental file-names for batches such that we naturally overwrite a partial/incomplete batch in a restart.
+yet (if we crash in-between these two operations). Another way to avoid the garbage collection would be to have e.g.,
+incremental file-names for batches such that we just overwrite a partial/incomplete batch on a restart (scary).
 
-The second object is the spine, the spine is mutable over time and logically (for consistency) we can think of it as 
-just a bag of batches and operations to add and remove batches from the spine. We can durably persist the spine (bag of
-batches) to the disk as a separate file and ensure that it has been fully written out to disk (by writing to a 
-temporary file first + fsync + rename with old file which is atomic). This avoids the problem of having partially 
-written spine meta-data. However, this is not enough since we have many spines in a dbsp program, and we 
-need to have the dbsp entire state which includes all spines in a consistent state. 
+The second object is the spine, the spine is mutable over time and as an abstraction for consistency we can think of 
+it as just a bag of batches and operations to add and remove batches from the spine. We can durably persist the 
+spine (bag of batches) to the disk as a separate file and ensure that it has been fully written out to disk (by 
+writing to a temporary file first + fsync + rename with old file which is atomic). This avoids the problem of having 
+partially written spine meta-data. However, this is not enough since we have many spines in a dbsp program, and we 
+need to have the entire dbsp state (all spines) consistent. 
 
 There are different ways to solve this problem:
 
