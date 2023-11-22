@@ -355,7 +355,7 @@ There are different ways to solve this problem:
 - the timestamp of the older two batches becomes `last` = current timestamp-1
 - When we commit, we store the timestamp of the commit as a checkpoint
 - When we need to rollback/or recover after a crash we read timestamp for each batch in a spine and remove all batches 
-  that have `earliest` timestamp larger than the checkpoint timestamp.
+  that have `earliest` timestamp larger than the checkpoint timestamp. We add back all batches where last == checkpoint.
 - We can remove all batches where `last` is smaller than the last checkpoint we need
 - We also need to make sure we don't merge any batches across commits.
 
