@@ -398,6 +398,8 @@ many IO requests at once. There are several ways to achieve this in dbsp:
       have 1000s of shards
     - It may also make the problem of imbalance among batches worse
 
+- The merge of a spine can ideally be expressed as a series of (vectored) scatter-gather writes.
+
 The prefetching API will be part of the storage engine API, but still we need to inject the prefetching logic in the 
 right places of dbsp. This is likely hard to get right so we need to be able to gather performance metrics about it too
 in the future.
