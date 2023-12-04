@@ -27,22 +27,28 @@ This arrangement corresponds to DBSP data structures like this, if
 
   * A 3-layer file with `T1 = K`, `T2 = V`, and `T3 = (T, R)`.
 
-    > Batches can contain out-of-order and duplicate times, even when
-    > the time type is `()`, so if we use this representation then
-    > some further thought is needed.
-
 It is likely that only 1-, 2, and 3-layer files matter, and maybe not
 even 3-layer.
 
 # Goals
 
-- Writable in one sequential pass.
-- Efficient indexing in column 1 and within row groups, for
-    * `O(lg n)` seek by data value.
+- Variable-length values in all columns.
+- Writing a file:
+  * Only needs one pass over the input data.
+  * Does not write parts of the output file more than once.
+  * Does not rely on sparse file semantics in the file system.
+  * Uses `O(1)` memory.
+- Read and write performance should be balanced; that is, neither
+  should be significantly sacrified to benefit the other.
+- Efficient indexing within row groups:
+    * `O(lg n)` seek by data value[^0]
     * Linear reads.
-- Approximate set membership query in `~O(1)` time.
+- Approximate set membership query in `~O(1)` time[^0].
 - Data checksums.
 - Support 1 TB total size.
+
+[^0]: It should be possible to turn this feature off for files that
+    don't need it.
 
 Possible goals for later:
 
@@ -167,8 +173,8 @@ With those parameters established, we continue to describe the file format.
 
 # Overall file format
 
-The file is a sequence of binary blocks, each a multiple of 4 kB in
-size, in the following order:
+The file is a sequence of binary blocks, each a power-of-2 multiple of
+4 kB in size, in the following order:
 
 - File header block
 - Interleaved data blocks, index blocks, and filter blocks.
