@@ -200,7 +200,6 @@ The file trailer block contains:
 - For each column:
   * The offset and size of its highest-level value index block (if any).
   * The offset and size of its highest-level row index block.
-  * The offset and size of the highest-level filter index block (if any).
   * The total number of rows in the column.
 
 # Data blocks
@@ -244,18 +243,18 @@ The trailer specifies the following per value:
 # Indexes
 
 We need to access different columns a few different ways:
-  
+
 1. We need to be able to search each row group by data value in
    forward and reverse order.
-  
+
 2. We need to be able to read each row group sequentially in forward
    and reverse order.  This requires an index because the data blocks
    that comprise a column are not necessarily consecutive in the layer
    file.
-  
+
 3. We need to be able to follow a pointer from column `i` to its
    associated row group in column `i + 1`.
-   
+
 A single index on values and row numbers can support all of these
 purposes.  However, if data values are large, the values make this
 index very large, up to 6.6% overhead[^1].  An index on just row
@@ -274,16 +273,19 @@ Thus, we construct two indexes on each column:
 Some operators will only use the second index.  We don't need to
 construct it if the operator says so as a hint.
 
-In addition, if the column has a filter, we add an index of blocks in
-the filter (see [Filters](#filters)).
-
 ## Index blocks
 
-An index block consists of a index block header, a sequence of index
-entries, and a index block trailer.
+An index block consists of the following, in order.
+- An index block header.
+- A sequence of index entries.
+- A filter map (if any of the blocks have filters).
+- An entry map (unless the index entries are fixed length).
 
-An index block header specifies the number of index entries in the block,
-plus the magic, size, and checksum that begins every block.
+An index block header specifies:
+- The magic, size, and checksum that begins every block (64 bits).
+- The number of index entries in the block (16 bits).
+- The offset within the block to the filter map (32 bits).
+- The offset within the block to the entry map (32 bits).
 
 ## Index entries
 
@@ -309,18 +311,48 @@ numbers, but it reduces the size of the row index by about 25% in the
 first column and about 50% in the other columns, up to 256 MB and 1
 GB, respectively, in some cases.
 
-## Index block trailer
+## Filter map
 
-In the data index only, the index block trailer specifies the offset
-of each index entry within the block.  (Index entries are fixed-size
-in the row indices, so their offsets can be calculated.)
+If any of the child nodes have filters, then this is an array of the
+filters that apply to them, in the format:
+
+- Number of child nodes.
+- Offset and size of filter block.
+
+The filter map contains counts because a single filter block can apply
+to many child nodes.
+
+## Entry map
+
+This is an array of the offsets within the block to the start of each
+index entry.
+
+The entry map is omitted if the index entries are fixed-size, as in
+the row indexes.
 
 # Filters
 
 Filters are useful in databases because a filter is much smaller than
 the data that it covers.  Filters are extra useful for databases
-(unlike ours) that keep data in lots of different places to eliminate
-most of those places for looking for a particular value.
+(unlike our use case) that keep data in lots of different places to
+eliminate most of those places for looking for a particular value.
+
+With DBSP, filters are likely to be useful for operators that keep and
+update the integral of an input stream, such as:
+
+- Join: incremental join looks up the key in each update on stream A
+  in the integral of stream B, and vice versa.
+
+- Aggregation: each update to the aggregation's input stream is
+  looked up in an integral of the input stream.
+
+- Distinct: similar to aggregation.
+
+- Upsert: similar to aggregation.
+
+Filters only help if the value being sought is not in the file.
+Otherwise, the time and space spent on the filter makes operations
+strictly slower.
 
 ## Filter space cost
 
@@ -330,7 +362,7 @@ regardless of the value's size.
 The false positive rate depends on the space per value.  With an RSQF:
 
   - 16 bits per value yields a false-positive rate of .02%.
-  
+
   - 8 bits per value yields a false-positive rate of 1.5%.
 
 The proportional cost depends on the size of the data:
@@ -340,70 +372,119 @@ The proportional cost depends on the size of the data:
   - For 32-byte values: 3% to 6% of the data size.
 
   - For 128-byte values: .8% to 1.5% of the data size.
-  
+
   - For 1-kB values: .1% to .2% of the data size.
-  
+
   - For larger values, less than .1% of the data size.
-  
+
 We could choose to omit small values from the filter.
-  
-## Filter time cost
 
-The time cost of a filter is the time to find and then load the filter
-block.
+## Locating filters
 
-We can use fixed-size filter blocks, say ones that store 65536 values
-each, which at 8 to 16 bits each is 64 kB to 128 kB per block.
+We need to find and then load the filter block.  The cost of loading a
+filter block is a single read.  That leaves finding the filter block,
+for which we need to make a design choice.  Some possibilities are:
 
-We need an index to be able to find the filter blocks.  With 65536
-values per block and 40 bits per index entry, we can keep the index
-small, no more than 5 MB total for 1 TB of data even with 16-byte
-values (that might be too small to use filtering), and no more than
-two levels (the top level of which is a a single block).  This means
-that finding the filter block will usually be cheap.
+* One large filter per column or per file.  This would work for
+  readers.  It does not work for writers because the `O(n)` size
+  filter would have to be held in memory or updated repeatedly on
+  disk.  The same is true of schemes that would partition the filter
+  based on the data hash.
 
-Loading the filter block is a single read.
+* Index-level filter.  That is, whenever we write out an index block,
+  we consider whether to also write a filter block that covers that
+  index block and all of the index and data blocks under it.  This
+  strategy might work.  It is inflexible, since if we decide that `k`
+  values are insufficient to write a filter block, then our next
+  choice is going to be for no less than `32 * k` values (where 32 is
+  the minimum branching factor).
 
-The following compares the cost of data versus filter lookups.  We see
-the biggest benefit at mid-size values (from 128 to 512 bytes), where
-a filter index lookup avoids traversing 4 levels of indexes.  At other
-data sizes, the filter still avoids 2 or 3 traversals.
+  The table below shows that there is an appropriate level in the
+  index hierarchy for a filter at all of the fixed-size values that we
+  care about (except possibly for 16-byte values, which may not be
+  worth filtering).
 
-Filtering will only help if the value being sought is not in the file.
-Otherwise, the time and space spent on the filter makes operations
-strictly slower.
+  ```
+          # of   Values        Entries            # of values covered by a single index block
+   Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
+    Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
+  ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
+     16     68 B     512    data    256       4  131 k   33 M    8 B    2 T                       4.0 GB
+     32     34 B     256    data    128       4   32 k    4 M  536 M   68 B                       8.1 GB
+     64     17 B     128    data     64       5    8 k  524 k   33 M    2 B  137 B                 16 GB
+    128      8 B      64    data     32       6    2 k   65 k    2 M   67 M    2 B   68 B          33 GB
+    256      4 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
+    512      2 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
+   1 kB      1 B      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
+   2 kB    536 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
+   4 kB    268 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
+   8 kB    134 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
+  16 kB     67 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
+  32 kB     33 M      32    data     32       4    1 k   32 k    1 M   33 M                        66 GB
+  64 kB     16 M      32    data     32       4    1 k   32 k    1 M   33 M                        66 GB
+  ```
 
-```
-Details of index coverage for min_branch=32, min_data_block=8192, min_index_block=8192:
-         # of   Values        Entries            # of values covered by a single index block
- Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
-  Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
-------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-   16     68 B     512  data      256       4  131 k   33 M    8 B    2 T                       4.0 GB
-                        filter   1638       2  107 M  175 B                                     5.0 MB
-   32     34 B     256  data      128       4   32 k    4 M  536 M   68 B                       8.1 GB
-                        filter   1638       2  107 M  175 B                                     2.5 MB
-   64     17 B     128  data       64       5    8 k  524 k   33 M    2 B  137 B                 16 GB
-                        filter   1638       2  107 M  175 B                                     1.3 MB
-  128      8 B      64  data       32       6    2 k   65 k    2 M   67 M    2 B   68 B          33 GB
-                        filter   1638       2  107 M  175 B                                     655 kB
-  256      4 B      32  data       32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
-                        filter   1638       2  107 M  175 B                                     335 kB
-  512      2 B      32  data       32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
-                        filter   1638       2  107 M  175 B                                     175 kB
- 1 kB      1 B      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-                        filter   1638       2  107 M  175 B                                      95 kB
- 2 kB    536 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-                        filter   1638       2  107 M  175 B                                      55 kB
- 4 kB    268 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-                        filter   1638       2  107 M  175 B                                      31 kB
- 8 kB    134 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-                        filter   1638       2  107 M  175 B                                      23 kB
-16 kB     67 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-                        filter   1638       1  107 M                                              7 kB
-32 kB     33 M      32  data       32       4    1 k   32 k    1 M   33 M                        66 GB
-                        filter   1638       1  107 M                                              7 kB
-64 kB     16 M      32  data       32       4    1 k   32 k    1 M   33 M                        66 GB
-                        filter   1638       1  107 M                                              7 kB
-```
+  But it might be difficult to tune a heuristic to decide on-line when
+  to emit a filter block.  The obvious heuristic is to emit a filter
+  block at some fixed value count threshold.  Suppose we set an 8k
+  value threshold; then consider the 64-byte case.  8k values in a
+  filter is fine (we end up with a 16 kB filter block), but 524k is
+  too many (a 1 MB filter block seems excessive) if we're just under
+  the threshold.  It's easier if we only consider only values that
+  force our minimum branching level, but that would limit filtering to
+  values that are 128 bytes or larger?
 
+* Separate filter index.  We could have a separate index for filters.
+  If we put 32k values in each filter block and then index those based
+  on the values that they cover, then we get a relatively small index
+  (compared to the data index size, shown in the table above) at about
+  64 MB regardless of data size:
+
+  ```
+  Index coverage for 1 TB data, min_branch=32, min_data_block=8192, min_index_block=8192:
+
+           # of   Values        Entries            # of values covered by a single index block
+   Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
+    Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
+  ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
+     16     68 B     512  filter    256       3    8 M    2 B  549 B                               64 MB
+     32     34 B     256  filter    128       3    4 M  536 M   68 B                               64 MB
+     64     17 B     128  filter     64       4    2 M  134 M    8 B  549 B                        65 MB
+    128      8 B      64  filter     32       4    1 M   33 M    1 B   34 B                        66 MB
+    256      4 B      32  filter     32       4    1 M   33 M    1 B   34 B                        66 MB
+    512      2 B      32  filter     32       4    1 M   33 M    1 B   34 B                        66 MB
+   1 kB      1 B      32  filter     32       3    1 M   33 M    1 B                               66 MB
+   2 kB    536 M      32  filter     32       3    1 M   33 M    1 B                               66 MB
+   4 kB    268 M      32  filter     32       3    1 M   33 M    1 B                               66 MB
+   8 kB    134 M      32  filter     32       3    1 M   33 M    1 B                               66 MB
+  16 kB     67 M      32  filter     32       3    1 M   33 M    1 B                               67 MB
+  32 kB     33 M      32  filter     32       2    1 M   33 M                                      66 MB
+  64 kB     16 M      32  filter     32       2    1 M   33 M                                      68 MB
+  ```
+
+  However, this filter index would partially duplicate the data index,
+  and as a percentage of the size of the filter data itself it wastes
+  a lot of disk (and memory): for 64-kB values, the total filter data
+  is no more than 32 MB (at 16 bits per value) and the index is over
+  twice as big!
+
+* Index-granularity filter.  This is much like the index-level filter
+  except that filter blocks can cover a partial L2- or higher-level
+  index block.  Each time the writer emits an L1 index block, if
+  enough values have been emitted since the last filter block, it
+  emits a new filter block.  References to the index blocks that
+  constitute a filter block then also point to the filter block.  This
+  reduces the variability of the number of values held in a filter
+  block to the maximum number of values in a data block, which is 512
+  (with 8-kB minimum block size and a minimum branching factor of 32).
+
+  It's hard to quantify the exact overhead of the index-granularity
+  filter.  The implemented model does not account for this or other
+  kinds of overhead in data or index blocks.  There will be some
+  overhead in data index nodes to point to the filter block, about 8
+  bytes per filter block.  That overhead seems unlikely to increase
+  the index height (for small values) or the size of index blocks (for
+  large values).
+
+Index-granularity filters seem to offer the best tradeoffs.  See
+[Filter map](#filter-map) for the tentative design.

@@ -160,7 +160,13 @@ impl LayerFile {
         // number.
         let row_index = Index::new(params, IndexType::Row, 12, values_per_data_block);
 
-        let filter_index = Index::new(params, IndexType::Filter, 5, 65536);
+        // This assumes that we put 32k values into each filter block, which
+        // means that the filter blocks are between about 32 kB (8 bits per
+        // value) and 64 kB (16 bits per value) each.
+        //
+        // This probably won't be how we organize the filters, so this index
+        // isn't shown by default.
+        let filter_index = Index::new(params, IndexType::Filter, 2 * params.value_size, 32768);
 
         Self {
             params: params.clone(),
@@ -238,8 +244,11 @@ struct Args {
     #[clap(long, default_value_t = 40)]
     total_data_size: u32,
 
-    /// Index(es) to include.
-    #[clap(long="index", default_values_t = vec![IndexType::Data, IndexType::C1Row, IndexType::Row, IndexType::Filter])]
+    /// Index(es) to display.
+    ///
+    /// We probably won't organize filters using their own index, so it isn't
+    /// shown by default.
+    #[clap(long="index", default_values_t = vec![IndexType::Data, IndexType::C1Row, IndexType::Row])]
     indexes: Vec<IndexType>,
 }
 
@@ -256,6 +265,9 @@ enum IndexType {
     Row,
 
     /// Filter.
+    ///
+    /// We probably won't organize filters using their own index, so this isn't
+    /// shown by default.
     Filter,
 }
 
