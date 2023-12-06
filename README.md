@@ -5,20 +5,20 @@ This document describes the persistent storage implementation for the dbsp runti
 ## Background
 
 At the lowest level of DBSP, state is stored in two data-structures which both represent (ordered) sets of keys and for
-every key, potentially a set of values (OrderedLayer) or a weight (ColumnLayer):
+every key, potentially a set of values (`OrderedLayer`) or a weight (`ColumnLayer`):
 
-* ColumnLayer: The column-layer holds a key with a weight. The in-memory implementation uses two equal-length
+* `ColumnLayer`: The column-layer holds a key with a weight. The in-memory implementation uses two equal-length
   vectors for keys and weights.
-* OrderedLayer: The ordered-layer holds key and a set of values per key. The in-memory representation uses a vector for
+* `OrderedLayer`: The ordered-layer holds key and a set of values per key. The in-memory representation uses a vector for
   keys, a vector for offsets (start/end of values for each key in values), and values -- which is again either an
-  OrderedLayer or a ColumnLayer.
+  `OrderedLayer` or a `ColumnLayer`.
 
 These two low-level constructs are then used to build the "middle-layer" data-structures which store state:
 
-* OrdIndexedZSet (OrderedLayer<K, ColumnLayer<V, R>, O>)
-* OrdKeyBatch (OrderedLayer<K, ColumnLayer<T, R>, O>)
-* OrdValBatch (OrderedLayer<K, OrderedLayer<V, ColumnLayer<T, R>, O>, O>)
-* OrdZSet (ColumnLayer<K, R>)
+* `OrdIndexedZSet (OrderedLayer<K, ColumnLayer<V, R>, O>)`
+* `OrdKeyBatch (OrderedLayer<K, ColumnLayer<T, R>, O>)`
+* `OrdValBatch (OrderedLayer<K, OrderedLayer<V, ColumnLayer<T, R>, O>, O>)`
+* `OrdZSet (ColumnLayer<K, R>)`
 
 These four data-structures are also called batches, because they implement the Batch trait in dbsp. Implementing Batch
 gives dbsp a way to combine two data-structures of the same type by merging them together (hence forming a new
