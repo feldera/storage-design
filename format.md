@@ -266,8 +266,12 @@ The trailer specifies the following per value:
   > we need that for some reason then we'll need to use offset/length
   > pairs instead of just offsets.
 
+  Optimization: We can omit this if they have a fixed stride.
+
 - `start..end` range pointing to the row group associated with this
   value in the next column, if this is not the last column.
+
+  Optimization: We can omit this if they have a fixed stride.
 
 # Indexes
 
