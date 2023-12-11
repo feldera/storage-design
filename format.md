@@ -70,11 +70,11 @@ values, because our 4-kB minimum block size means that the minimum
 branching factor will be high.  For example, over 100 32-byte values
 fit in a 4-kB block, even considering overhead.
 
-The branching factor is more important for large values.  Suppose
-only a single value fits into a data block.  The index block that
-refers to it reproduces the first and last value in each data
-block, which in turn makes it likely that index block only fits a
-single child, which is pathological and silly.
+The branching factor is more important for large values.  Suppose only
+a single value fits into a data block.  The index block that refers to
+it reproduces the first value in each data block, which in turn makes
+it likely that index block only fits a single child, which is
+pathological and silly.
 
 Thus, we need to ensure at least a minimum branching factor even with
 large values.  The program in this repository will estimate some
@@ -83,83 +83,112 @@ factor and 4-kB minimum block sizes, the maximum height ranges from 4
 to 7, depending on the size of each data value:
 
 ```
-Details of index coverage for min_branch=16, min_data_block=4096, min_index_block=4096:
+Index coverage for 1 TB data, min_branch=16, min_data_block=4096, min_index_block=4096:
+
          # of   Values        Entries            # of values covered by a single index block
  Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
   Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
 ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-   16     68 B     256  data      128       4   32 k    4 M  536 M   68 B                       8.1 GB
-   32     34 B     128  data       64       5    8 k  524 k   33 M    2 B  137 B                 16 GB
-   64     17 B      64  data       32       6    2 k   65 k    2 M   67 M    2 B   68 B          33 GB
-  128      8 B      32  data       16       7    512    8 k  131 k    2 M   33 M  536 M    8 B   68 GB
-  256      4 B      16  data       16       7    256    4 k   65 k    1 M   16 M  268 M    4 B  136 GB
-  512      2 B      16  data       16       7    256    4 k   65 k    1 M   16 M  268 M    4 B  136 GB
- 1 kB      1 B      16  data       16       7    256    4 k   65 k    1 M   16 M  268 M    4 B  136 GB
- 2 kB    536 M      16  data       16       7    256    4 k   65 k    1 M   16 M  268 M    4 B  136 GB
- 4 kB    268 M      16  data       16       6    256    4 k   65 k    1 M   16 M  268 M         136 GB
- 8 kB    134 M      16  data       16       6    256    4 k   65 k    1 M   16 M  268 M         136 GB
-16 kB     67 M      16  data       16       6    256    4 k   65 k    1 M   16 M  268 M         136 GB
-32 kB     33 M      16  data       16       6    256    4 k   65 k    1 M   16 M  268 M         136 GB
-64 kB     16 M      16  data       16       5    256    4 k   65 k    1 M   16 M                136 GB
+   16     68 B     256    data    256       4   65 k   16 M    4 B    1 T                       4.0 GB
+   32     34 B     128    data    128       4   16 k    2 M  268 M   34 B                       8.1 GB
+   64     17 B      64    data     64       5    4 k  262 k   16 M    1 B   68 B                 16 GB
+  128      8 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+  256      4 B      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+  512      2 B      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+ 1 kB      1 B      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+ 2 kB    536 M      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+ 4 kB    268 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+ 8 kB    134 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+16 kB     67 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+32 kB     33 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+64 kB     16 M      16    data     16       5    256    4 k   65 k    1 M   16 M                 68 GB
 ```
 
 If we increase the minimum index block size to 8 kB, it reduces the
-index height for the 32-, 64- and 128-byte value sizes:
+index height for the 64-, 128, and 256-byte value sizes:
 
 ```
-Details of index coverage for min_branch=16, min_data_block=4096, min_index_block=8192:
+Index coverage for 1 TB data, min_branch=16, min_data_block=4096, min_index_block=8192:
+
          # of   Values        Entries            # of values covered by a single index block
  Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
   Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
 ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-   16     68 B     256  data      256       4   65 k   16 M    4 B    1 T                       8.0 GB
-   32     34 B     128  data      128       4   16 k    2 M  268 M   34 B                        16 GB
-   64     17 B      64  data       64       5    4 k  262 k   16 M    1 B   68 B                 32 GB
-  128      8 B      32  data       32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
+   16     68 B     256    data    512       4  131 k   67 M   34 B   17 T                       4.0 GB
+   32     34 B     128    data    256       4   32 k    8 M    2 B  549 B                       8.0 GB
+   64     17 B      64    data    128       4    8 k    1 M  134 M   17 B                        16 GB
+  128      8 B      32    data     64       5    2 k  131 k    8 M  536 M   34 B                 32 GB
+  256      4 B      16    data     32       6    512   16 k  524 k   16 M  536 M   17 B          66 GB
 ...
 ```
 
 Increasing the minimum block size for both data and index blocks to 8
-kB doesn't further reduce the index height.
+kB additionally reduces the index height for 16-byte values and the
+total size of the index for values up to 256 bytes:
+
+```
+Index coverage for 1 TB data, min_branch=16, min_data_block=8192, min_index_block=8192:
+
+         # of   Values        Entries            # of values covered by a single index block
+ Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
+  Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
+------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
+   16     68 B     512    data    512       3  262 k  134 M   68 B                              2.0 GB
+   32     34 B     256    data    256       4   65 k   16 M    4 B    1 T                       4.0 GB
+   64     17 B     128    data    128       4   16 k    2 M  268 M   34 B                       8.1 GB
+  128      8 B      64    data     64       5    4 k  262 k   16 M    1 B   68 B                 16 GB
+  256      4 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+  512      2 B      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+ 1 kB      1 B      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+ 2 kB    536 M      16    data     16       7    256    4 k   65 k    1 M   16 M  268 M    4 B   68 GB
+ 4 kB    268 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+ 8 kB    134 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+16 kB     67 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+32 kB     33 M      16    data     16       6    256    4 k   65 k    1 M   16 M  268 M          68 GB
+64 kB     16 M      16    data     16       5    256    4 k   65 k    1 M   16 M                 68 GB
+```
 
 On the other hand, if we increase the minimum branching factor to 32
 and keep the minimum block sizes at 4 kB, it reduces the maximum
 height to 6 or below for every value size:
 
 ```
-Details of index coverage for min_branch=32, min_data_block=4096, min_index_block=4096:
+Index coverage for 1 TB data, min_branch=32, min_data_block=4096, min_index_block=4096:
+
          # of   Values        Entries            # of values covered by a single index block
  Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
   Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
 ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-   16     68 B     256  data      128       4   32 k    4 M  536 M   68 B                       8.1 GB
-   32     34 B     128  data       64       5    8 k  524 k   33 M    2 B  137 B                 16 GB
-   64     17 B      64  data       32       6    2 k   65 k    2 M   67 M    2 B   68 B          33 GB
-  128      8 B      32  data       32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
-  256      4 B      32  data       32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
-  512      2 B      32  data       32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
- 1 kB      1 B      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
- 2 kB    536 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
- 4 kB    268 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
- 8 kB    134 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-16 kB     67 M      32  data       32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-32 kB     33 M      32  data       32       4    1 k   32 k    1 M   33 M                        66 GB
-64 kB     16 M      32  data       32       4    1 k   32 k    1 M   33 M                        66 GB
+   16     68 B     256    data    256       4   65 k   16 M    4 B    1 T                       4.0 GB
+   32     34 B     128    data    128       4   16 k    2 M  268 M   34 B                       8.1 GB
+   64     17 B      64    data     64       5    4 k  262 k   16 M    1 B   68 B                 16 GB
+  128      8 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+  256      4 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+  512      2 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+ 1 kB      1 B      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+ 2 kB    536 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+ 4 kB    268 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+ 8 kB    134 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+16 kB     67 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+32 kB     33 M      32    data     32       4    1 k   32 k    1 M   33 M                        33 GB
+64 kB     16 M      32    data     32       4    1 k   32 k    1 M   33 M                        33 GB
 ```
 
 If we also increase the minimum block sizes to 8 kB, it further
-reduces the index height for 32- and 64-byte values:
+reduces the index height for 16-, 64-, and 128-byte values:
 
 
 ```
-Details of index coverage for min_branch=32, min_data_block=8192, min_index_block=8192:
+Index coverage for 1 TB data, min_branch=32, min_data_block=8192, min_index_block=8192:
+
          # of   Values        Entries            # of values covered by a single index block
  Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
   Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
 ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-   16     68 B     512  data      256       4  131 k   33 M    8 B    2 T                       4.0 GB
-   32     34 B     256  data      128       4   32 k    4 M  536 M   68 B                       8.1 GB
-   64     17 B     128  data       64       5    8 k  524 k   33 M    2 B  137 B                 16 GB
+   16     68 B     512    data    512       3  262 k  134 M   68 B                              2.0 GB
+   32     34 B     256    data    256       4   65 k   16 M    4 B    1 T                       4.0 GB
+   64     17 B     128    data    128       4   16 k    2 M  268 M   34 B                       8.1 GB
+  128      8 B      64    data     64       5    4 k  262 k   16 M    1 B   68 B                 16 GB
 ...
 ```
 
@@ -257,12 +286,12 @@ We need to access different columns a few different ways:
 
 A single index on values and row numbers can support all of these
 purposes.  However, if data values are large, the values make this
-index very large, up to 6.6% overhead[^1].  An index on just row
+index very large, up to 3.3% overhead[^1].  An index on just row
 numbers is much smaller, never more than .2% overhead[^2].
 
-[^1]: 66 GB, for 1 TB of values between 256 bytes and 64 kB in size.
-[^2]: Between 8 MB and 2 GB for 1 TB of values between 16 bytes and 64
-    kB in size.
+[^1]: 33 GB, for 1 TB of values between 256 bytes and 64 kB in size.
+[^2]: Between 6 MB and 1.5 GB for 1 TB of values between 16 bytes and
+    64 kB in size.
 
 Thus, we construct two indexes on each column:
 
@@ -304,7 +333,7 @@ An index entry consists of:
   Column 1 does not need row numbers because it is never looked up
   that way.
 
-- In the data index only, the first and last value in the child.
+- In the data index only, the first value in the child.
 
 It might seem silly to optimize the sizes of the offsets and row
 numbers, but it reduces the size of the row index by about 25% in the
@@ -402,37 +431,39 @@ for which we need to make a design choice.  Some possibilities are:
   The table below shows that there is an appropriate level in the
   index hierarchy for a filter at all of the fixed-size values that we
   care about (except possibly for 16-byte values, which may not be
-  worth filtering).
+  worth filtering, and 128-byte values).
 
   ```
-          # of   Values        Entries            # of values covered by a single index block
+  Index coverage for 1 TB data, min_branch=32, min_data_block=8192, min_index_block=8192:
+
+           # of   Values        Entries            # of values covered by a single index block
    Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
     Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
   ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-     16     68 B     512    data    256       4  131 k   33 M    8 B    2 T                       4.0 GB
-     32     34 B     256    data    128       4   32 k    4 M  536 M   68 B                       8.1 GB
-     64     17 B     128    data     64       5    8 k  524 k   33 M    2 B  137 B                 16 GB
-    128      8 B      64    data     32       6    2 k   65 k    2 M   67 M    2 B   68 B          33 GB
-    256      4 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
-    512      2 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          66 GB
-   1 kB      1 B      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-   2 kB    536 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-   4 kB    268 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-   8 kB    134 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-  16 kB     67 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 66 GB
-  32 kB     33 M      32    data     32       4    1 k   32 k    1 M   33 M                        66 GB
-  64 kB     16 M      32    data     32       4    1 k   32 k    1 M   33 M                        66 GB
+     16     68 B     512    data    512       3  262 k  134 M   68 B                              2.0 GB
+     32     34 B     256    data    256       4   65 k   16 M    4 B    1 T                       4.0 GB
+     64     17 B     128    data    128       4   16 k    2 M  268 M   34 B                       8.1 GB
+    128      8 B      64    data     64       5    4 k  262 k   16 M    1 B   68 B                 16 GB
+    256      4 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+    512      2 B      32    data     32       6    1 k   32 k    1 M   33 M    1 B   34 B          33 GB
+   1 kB      1 B      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+   2 kB    536 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+   4 kB    268 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+   8 kB    134 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+  16 kB     67 M      32    data     32       5    1 k   32 k    1 M   33 M    1 B                 33 GB
+  32 kB     33 M      32    data     32       4    1 k   32 k    1 M   33 M                        33 GB
+  64 kB     16 M      32    data     32       4    1 k   32 k    1 M   33 M                        33 GB
   ```
 
   But it might be difficult to tune a heuristic to decide on-line when
   to emit a filter block.  The obvious heuristic is to emit a filter
-  block at some fixed value count threshold.  Suppose we set an 8k
+  block at some fixed value count threshold.  Suppose we set a 16k
   value threshold; then consider the 64-byte case.  8k values in a
-  filter is fine (we end up with a 16 kB filter block), but 524k is
-  too many (a 1 MB filter block seems excessive) if we're just under
+  filter is fine (we end up with a 32 kB filter block), but 2M is
+  too many (a 4 MB filter block seems excessive) if we're just under
   the threshold.  It's easier if we only consider only values that
   force our minimum branching level, but that would limit filtering to
-  values that are 128 bytes or larger?
+  values that are 256 bytes or larger?
 
 * Separate filter index.  We could have a separate index for filters.
   If we put 32k values in each filter block and then index those based
@@ -447,26 +478,26 @@ for which we need to make a design choice.  Some possibilities are:
    Value  Values   /Data         /Index  Index   -----------------------------------------------   Index
     Size  in 1TB   Block  Index   Block  Height    L1     L2     L3     L4     L5     L6     L7     Size
   ------  ------  ------  -----  ------  ------  -----  -----  -----  -----  -----  -----  -----  ------
-     16     68 B     512  filter    256       3    8 M    2 B  549 B                               64 MB
-     32     34 B     256  filter    128       3    4 M  536 M   68 B                               64 MB
-     64     17 B     128  filter     64       4    2 M  134 M    8 B  549 B                        65 MB
-    128      8 B      64  filter     32       4    1 M   33 M    1 B   34 B                        66 MB
-    256      4 B      32  filter     32       4    1 M   33 M    1 B   34 B                        66 MB
-    512      2 B      32  filter     32       4    1 M   33 M    1 B   34 B                        66 MB
-   1 kB      1 B      32  filter     32       3    1 M   33 M    1 B                               66 MB
-   2 kB    536 M      32  filter     32       3    1 M   33 M    1 B                               66 MB
-   4 kB    268 M      32  filter     32       3    1 M   33 M    1 B                               66 MB
-   8 kB    134 M      32  filter     32       3    1 M   33 M    1 B                               66 MB
-  16 kB     67 M      32  filter     32       3    1 M   33 M    1 B                               67 MB
-  32 kB     33 M      32  filter     32       2    1 M   33 M                                      66 MB
-  64 kB     16 M      32  filter     32       2    1 M   33 M                                      68 MB
+     16     68 B     512  filter    512       3   16 M    8 B    4 T                               32 MB
+     32     34 B     256  filter    256       3    8 M    2 B  549 B                               32 MB
+     64     17 B     128  filter    128       3    4 M  536 M   68 B                               32 MB
+    128      8 B      64  filter     64       3    2 M  134 M    8 B                               32 MB
+    256      4 B      32  filter     32       4    1 M   33 M    1 B   34 B                        33 MB
+    512      2 B      32  filter     32       4    1 M   33 M    1 B   34 B                        33 MB
+   1 kB      1 B      32  filter     32       3    1 M   33 M    1 B                               33 MB
+   2 kB    536 M      32  filter     32       3    1 M   33 M    1 B                               33 MB
+   4 kB    268 M      32  filter     32       3    1 M   33 M    1 B                               33 MB
+   8 kB    134 M      32  filter     32       3    1 M   33 M    1 B                               33 MB
+  16 kB     67 M      32  filter     32       3    1 M   33 M    1 B                               33 MB
+  32 kB     33 M      32  filter     32       2    1 M   33 M                                      33 MB
+  64 kB     16 M      32  filter     32       2    1 M   33 M                                      34 MB
   ```
 
   However, this filter index would partially duplicate the data index,
   and as a percentage of the size of the filter data itself it wastes
   a lot of disk (and memory): for 64-kB values, the total filter data
-  is no more than 32 MB (at 16 bits per value) and the index is over
-  twice as big!
+  is no more than 32 MB (at 16 bits per value) and the index is bigger
+  than that!
 
 * Index-granularity filter.  This is much like the index-level filter
   except that filter blocks can cover a partial L2- or higher-level

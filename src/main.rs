@@ -143,12 +143,12 @@ impl LayerFile {
         let data_block_size = params.value_size * values_per_data_block;
         let total_data_blocks = params.total_data_size / data_block_size;
 
-        // Each entry in the data index contains two values (first and last in
-        // the child block).
+        // Each entry in the data index contains one value (the first in the
+        // child block).
         let data_index = Index::new(
             params,
             IndexType::Data,
-            2 * params.value_size,
+            params.value_size,
             values_per_data_block,
         );
 
@@ -166,7 +166,7 @@ impl LayerFile {
         //
         // This probably won't be how we organize the filters, so this index
         // isn't shown by default.
-        let filter_index = Index::new(params, IndexType::Filter, 2 * params.value_size, 32768);
+        let filter_index = Index::new(params, IndexType::Filter, params.value_size, 32768);
 
         Self {
             params: params.clone(),
