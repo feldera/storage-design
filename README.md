@@ -238,76 +238,116 @@ the DRAM implementation. However, here as well we will encounter are a few thing
 the `valid` flag or the `recede_to` functionality but in discussion with Leonid `recede_to` can probably be
 eliminated completely).
 
-### Persistent Spine
+### Persistent Circuits
 
-Finally, the Spine needs to be implemented for persistence. The spine keeps a collection of batches, and uses cursors
-into them to lookup keys and values and computes the right weight during reads. It also merges batches to garbage
-collect and maintain state. Again, at least initially we should be able to keep most of the DRAM code for the Spine
-implementation. However, we need to ensure that the spine state is persistent itself. This involves storing which
-batches (files) are currently in the spine along with certain meta-data (bounds and filters mentioned earlier).
-While it's not a lot of state, it's important to store this data in manner that is consistent with the persistent layers
-so a spine's original state can be recovered from disk in case of failures. This will require either some minimal
-form of transactions or at least carefully chosen fsync calls for batch data and spine (e.g., we can't just write the
-spine state to disk and then the batches after or vice-versa).
-We also might keep a single write-ahead log for all spine state or have a separate file/log for every spine which logs
-changes such that they can be check-pointed.
+The general problem we face is to persist an entire circuit at a given step id
+and resume from it later (potentially inside a new (OS) process).
+
+Luckily, with what we discussed above dbsp can already store batches in files, which contain 
+most of the circuit state. However, to checkpoint and resume from checkpoints, the software also needs to save the spine state.
+The spine holds collections of batches, provides a cursor to lookup keys and values from the batch collection,
+and computes the weight of a tuple by consolidating identical tuples. It also merges batches during garbage-collection.
+
+Persisting a spine involves storing the batches/files which are currently in the spine along with certain meta-data 
+(bounds and filters mentioned earlier). While it's not a lot of state, it's important to store this data in
+a manner that is consistent with the persistent layers so a spine's original state can be recovered from 
+disk in case of failures.
+
+Aside from spines, there is other state we will eventually have to persist but 
+[we ignore it for now](https://github.com/feldera/feldera/issues/1560) as it only applies to 
+recursive circuits. However, we do want a general design for persisting circuits which we explain next.
 
 ### Integration with the rest of DBSP
 
-While the previous sections focused on the storage layer functionality, in order to have a complete system
-we need a control plane API. This includes: 
+Persistence is exposed through a control plane API that operates on a circuit handle. The control plane API involves:
 
-#### Data Consistency
+- an API call for taking a checkpoint of the circuit: [`commit`]
+- an API call to delete (the oldest available) checkpoint: [`gc_checkpoint`]
+- a configuration option when initializing the circuit to resume from a given storage location and checkpoint in 
+  [`CircuitConfig`]
 
-There are two entities that we are interested in persisting. Note that we first consider the single-node case,
-and then add the extra consistency requirements in presence of multiple workers.
+Next we will explain these operations and settings in more detail.
 
-The first one is the batch. The batch is immutable, so we can just write it to disk and ensure (using fsync)
-that it has been fully written out to disk. If we crash during writing a batch we may end up with a partially
-written batch. However, this is not a problem for consistency as long as we never add a batch to a spine
-that has not been fully written (with fsync) to disk. Having partial batches on disk may be a problem
-as we potentially need to garbage collect them if we crash during writing one. Note that looking at checksums won't
-be enough for garbage collection as we can potentially have a fully written batch that just hasn't been added to a spine
-yet (if we crash in-between these two operations). Another way to avoid the garbage collection would be to have e.g.,
-incremental file-names for batches such that we just overwrite a partial/incomplete batch on a restart (scary).
+#### Providing a storage location
 
-The second object is the spine, the spine is mutable over time and as an abstraction for consistency we can think of 
-it as just a bag of batches and operations to add and remove batches from the spine. We can durably persist the 
-spine (bag of batches) to the disk as a separate file and ensure that it has been fully written out to disk (by 
-writing to a temporary file first + fsync + rename with old file which is atomic). This avoids the problem of having 
-partially written spine meta-data. However, this is not enough since we have many spines in a dbsp program, and we 
-need to have the entire dbsp state (all spines) consistent. 
+The circuit will store its persistent state in a set of files and sub-directories in a path specified through a 
+configuration option.
+The circuit will take full control of this location and add/remove files/directories over time. It will also ensure that
+the directory is locked as to prevent accidentally running two processes/circuits that use the same directory.
 
-There are different ways to solve this problem:
+The layout of a circuit storage location looks like this:
 
-##### With a log
+- `checkpoints.feldera`: A binary file containing a list of available checkpoints (uuid, ordered by time taken), and for
+  every checkpoint an optional identifier, corresponding circuit step id, and fingerprint of the circuit.
+- `*.mut`: A partially written file, that may exist during adding a new checkpoint/writing a new batch.
+  The `.mut` will eventually be removed once the file is fully written. While it is not necessary it makes it a
+  bit safer to get rid of incomplete files when recovering from a failure.
+- `<uuid>.feldera`: Batch files used by various spines of a circuit.
+- `<uuid>/`: Directories that correspond to a checkpoint and have checkpoint specific files (note that a batch
+  may be used by many checkpoints, hence they live in the base directory).
+- `<uuid>/pspine-batches-<persistent-id>.dat`: There is one for every spine in the circuit. These are rkyv files
+  of type `Vec<String>` and they contain just a list of batch filenames in-use by the spine for this given checkpoint.
+- `<uuid>/psine-<persistent-id>.dat`: This contains a rkyv representation of all the state necessary to completely
+  reconstruct `struct Spine`.
 
-- The modifications to spines happen during a transaction.
-- Whenever we add or remove a batch to a spine, we also log it as an entry to an undo log.
-- When we commit, we clear the undo log, and in addition we can remove any batch files we now no longer need (e.g., 
-  because they got merged into a new badge).
-- If we need to rollback/or recover after crash we read the undo log and undo all changes to the spines (e.g., remove 
-  batches that got added and add batches that got removed).
+Q: Why do we have two set of files, `pspine-*.dat` and `pspine-batches-*.dat` for spine meta-data: It is easier to 
+read `pspine-batches-*.dat` as it doesn't require the code to know the exact generic type 
+of the Spine in order to read/write it with rkyv.
 
-##### Using Timestamps
+#### Taking a checkpoint
 
-- The modifications to spines happen during a transaction
-- We store the `earliest` and `last` timestamp (e.g., incrementing transaction id) for each batch
-- We set `earliest` of every incoming batch to the current timestamp (and `last` to nil)
-- on a merge, the timestamp of the new batch becomes `earliest` = current timestamp
-- the timestamp of the older two batches becomes `last` = current timestamp-1
-- When we commit, we store the timestamp of the commit as a checkpoint
-- When we need to rollback/or recover after a crash we read timestamp for each batch in a spine and remove all batches 
-  that have `earliest` timestamp larger than the checkpoint timestamp. We add back all batches where last == checkpoint.
-- We can remove all batches where `last` is smaller than the last checkpoint we need
-- We also need to make sure we don't merge any batches across commits.
+We add a blocking `commit` method to the circuit (`DBSPHandle`) to take a new checkpoint.
+The commit is named using an `uuid` and will lead to a `uuid` directory being created in the 
+storage location for storing files specific to the checkpoint. To take a checkpoint, the circuit will
+send a checkpoint command to all workers, which then will invoke a `checkpoint` method on every node/operator. 
+The operators can indepdently have custom logic to persist state and/or reply with an error.
+The checkpoint command will wait synchronously until all workers have replied. If everyone
+was successful it will write a new entry for this checkpoint into `checkpoints.feldera.mut` and atomically
+rename it to `checkpoints.feldera`, which is the point at which the checkpoint was successfully
+created and is discoverable by a new process/circuit.
 
-This is similar to the log approach, but we don't need to store the undo log as we can just use the timestamps to
-figure out which batches to remove. While we can write e.g., earliest as part of writing the batch, I'm not sure
-how/where we write the `last` timestamp (@Leonid).
+Concurrent execution between commit and step is prevented by the rust type system.
 
-One of the control plane APIs will be a transaction API to ensure consistency of all DBSP Spine (and Layer) state. 
-Another API will be added to restore to a previous checkpoint.
+The most important commit implementation is the one for the Spine. Since the Spine is roughly a set
+of batches, the commit implementation has to write this list out in a persistent way so that a new dbsp process can
+reinitialize the Spine again with the same set of when resuming after a crash. 
+Potentially, there can be many Spines in a circuit, so dbsp also needs to name them so it can find them again. 
+For that we added persistent-ids for operators, based on the global node-ids of the circuit.
+
+Currently, we flush (too often) whenever we complete writing a batch. In the future we would need
+to flush *at least* before we commit.
+In case of an ongoing merge (two batches are currently being merged into one while we commit), we will ignore
+the new batch that is in the making and just record the batches that are currently being merged. This means 
+in the event of a crash we would loose any progress of ongoing merges.
+
+If all commit operations on every spine succeeds, we can (given that we know the commit id) recover the state
+of every spine by re-creating the spine object and inserting the same batches again into it. More on that
+in the next section.
+
+#### Removing a checkpoint
+
+Deleting a checkpoint involves two steps:
+
+ - Removing the checkpoint entry from the `checkpoints.feldera` file.
+ - Deleting the checkpoint directory in the storage location
+ - Figuring out which batch files (in the base directory) can be removed
+
+The first two operations are trivial. Garbage collection of old batch files can be done by computing the 
+set difference of all available batch files (in the file-system) vs. 
+all files referenced by the available checkpoints (computed by reading the spine meta-data files).
+
+#### Recovery Process
+
+In order to restore a given checkpoint, we added two configuration options which are given to the circuit
+on initialization (the storage location and the commit id).
+Both of these can be queried from the `Runtime` struct in dbsp, hence during circuit construction we can
+decide if we want to either create a new/empty operator or initialize an operator based on state found
+in a commit (e.g., the spine would reinitialize itself by creating batches from existing files).
+
+Another problem that is related to removing checkpoint is collecting garbage on startup. When a circuit
+crashes there might be intermediary files (e.g., unfinished merges of batches) in the storage location, 
+depending on the size of batches being merged they might be large. Hence we run a cleanup routine on startup
+to remove any leftover, temporary files.
 
 ##### Data consistency for Distributed dbsp
 
