@@ -356,13 +356,8 @@ The requirements for consistency in presence of multiple workers are
 In essence: a worker needs to be able to participate in a distributed commit protocol to ensure that all workers 
 have the same view of the data. If one of the workers abort, all clients need to revert to the previous checkpoint.
 
-In both cases discussed above we can ensure to revert to an earlier point even in the presence of already committed
-transaction:
-
-- For the undo log the worker can just keep the undo log for every transaction around that we want to be able to 
-  revert to.
-- For the timestamp approach there is no need to do anything (aside from making sure we don't remove batches too
-  early)
+With the implementation above, the distributed implementation needs to revert every worker to the commit taken 
+at the same step id.
 
 #### Getting more parallelism for the disks
 
