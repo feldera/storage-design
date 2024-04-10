@@ -243,15 +243,15 @@ eliminated completely).
 The general problem we face is to persist an entire circuit at a given step id
 and resume from it later (potentially inside a new (OS) process).
 
-Luckily, with what we discussed above we can already store batches on files, which ends up being 
-most of the circuit state. However, to checkpoint an resume from checkpoints, we also needs to save the spine state.
+Luckily, with what we discussed above dbsp can already store batches in files, which contain 
+most of the circuit state. However, to checkpoint and resume from checkpoints, the software also needs to save the spine state.
 The spine holds collections of batches, provides a cursor to lookup keys and values from the batch collection,
-and computes the right weight during reads. It also merges batches to garbage collect them.
+and computes the weight of a tuple by consolidating identical tuples. It also merges batches during garbage-collection.
 
-Persisting a spine involves storing which batches/files are currently in the spine along with certain meta-data 
+Persisting a spine involves storing the batches/files which are currently in the spine along with certain meta-data 
 (bounds and filters mentioned earlier). While it's not a lot of state, it's important to store this data in
-manner that is consistent with the persistent layers so a spine's original state can be recovered from 
-disk in case of failures. Currently, we keep most of the DRAM code for the Spine implementation.
+a manner that is consistent with the persistent layers so a spine's original state can be recovered from 
+disk in case of failures.
 
 Aside from spines, there is other state we will eventually have to persist but 
 [we ignore it for now](https://github.com/feldera/feldera/issues/1560) as it only applies to 
@@ -259,24 +259,25 @@ recursive circuits. However, we do want a general design for persisting circuits
 
 ### Integration with the rest of DBSP
 
-Persistence is exposed through a control plane API added to the circuit handle. The control plane API involves:
+Persistence is exposed through a control plane API that operates on a circuit handle. The control plane API involves:
 
-- providing a storage location (directory)
-- an API call for taking a checkpoint of the circuit
-- an API call to delete (the oldest available) checkpoint
-- a configuration option when initializing the circuit to resume from a given storage location and checkpoint
+- an API call for taking a checkpoint of the circuit: [`commit`]
+- an API call to delete (the oldest available) checkpoint: [`gc_checkpoint`]
+- a configuration option when initializing the circuit to resume from a given storage location and checkpoint in 
+  [`CircuitConfig`]
 
-Next we will explain these operations in more detail.
+Next we will explain these operations and settings in more detail.
 
 #### Providing a storage location
 
-The circuit will store its persistent state in a set of files and sub-directories in a user-provided path.
+The circuit will store its persistent state in a set of files and sub-directories in a path specified through a 
+configuration option.
 The circuit will take full control of this location and add/remove files/directories over time. It will also ensure that
-the directory is locked as to prevent accidentially running two processes/circuits that use the same directory.
+the directory is locked as to prevent accidentally running two processes/circuits that use the same directory.
 
 The layout of a circuit storage location looks like this:
 
-- `checkpoints.feldera`: A file containing a list of available checkpoints (uuid, ordered by time taken), and for
+- `checkpoints.feldera`: A binary file containing a list of available checkpoints (uuid, ordered by time taken), and for
   every checkpoint an optional identifier, corresponding circuit step id, and fingerprint of the circuit.
 - `*.mut`: A partially written file, that may exist during adding a new checkpoint/writing a new batch.
   The `.mut` will eventually be removed once the file is fully written. While it is not necessary it makes it a
@@ -285,37 +286,35 @@ The layout of a circuit storage location looks like this:
 - `<uuid>/`: Directories that correspond to a checkpoint and have checkpoint specific files (note that a batch
   may be used by many checkpoints, hence they live in the base directory).
 - `<uuid>/pspine-batches-<persistent-id>.dat`: There is one for every spine in the circuit. These are rkyv files
-  of type `Vec<String>` and they contain just a list of batch files in by the spine for this given checkpoint.
+  of type `Vec<String>` and they contain just a list of batch filenames in-use by the spine for this given checkpoint.
 - `<uuid>/psine-<persistent-id>.dat`: This contains a rkyv representation of all the state necessary to completely
   reconstruct `struct Spine`.
 
 Q: Why do we have two set of files, `pspine-*.dat` and `pspine-batches-*.dat` for spine meta-data: It is easier to 
-read `pspine-batches-*.dat` from anywhere in the code as it doesn't require me to know the exact generic type of \
-the Spine in order to read/write it with rkyv.
+read `pspine-batches-*.dat` as it doesn't require the code to know the exact generic type 
+of the Spine in order to read/write it with rkyv.
 
 #### Taking a checkpoint
 
-We add a `commit` to the circuit (`DBSPHandle`) to take a new checkpoint. The commit is named using an `uuid`
-and will lead to a `uuid` directory being created in the storage location for storing files
-specific to the checkpoint. We take a checkpoint by allowing the circuit handle to send 
-a checkpoint command to all workers, which then will invoke a `checkpoint` function on every node/operator. 
+We add a blocking `commit` method to the circuit (`DBSPHandle`) to take a new checkpoint.
+The commit is named using an `uuid` and will lead to a `uuid` directory being created in the 
+storage location for storing files specific to the checkpoint. To take a checkpoint, the circuit will
+send a checkpoint command to all workers, which then will invoke a `checkpoint` method on every node/operator. 
 The operators can indepdently have custom logic to persist state and/or reply with an error.
 The checkpoint command will wait synchronously until all workers have replied. If everyone
 was successful it will write a new entry for this checkpoint into `checkpoints.feldera.mut` and atomically
 rename it to `checkpoints.feldera`, which is the point at which the checkpoint was successfully
-created and is discoverable by a new process/circuit after.
+created and is discoverable by a new process/circuit.
 
-One thing to consider is that we do not want the user to invoke a checkpoint while the circuit is performing a
-step. But this is easy to ensure in rust as `step` is a mutable operation on the circuit.
+Concurrent execution between commit and step is prevented by the rust type system.
 
-The most important operator to implement commit is the Spine. Since the Spine is roughly a set
-of batches, the commit implementation has to write this list out in a persistent way so that we can
-reinitialize the Spine again with the same set of files in case we resume with the circuit in a new process. 
-Potentially, there can be many Spines in a circuit, so we also need to name them so we can find them again. 
-For that we add persistent-ids for operators that are based on the global node-ids of the circuit.
+The most important commit implementation is the one for the Spine. Since the Spine is roughly a set
+of batches, the commit implementation has to write this list out in a persistent way so that a new dbsp process can
+reinitialize the Spine again with the same set of when resuming after a crash. 
+Potentially, there can be many Spines in a circuit, so dbsp also needs to name them so it can find them again. 
+For that we added persistent-ids for operators, based on the global node-ids of the circuit.
 
-Another potential pitfall could be that batch-files are not fully written out to disk when we commit
-the file. Currently we flush (too often) whenever we completed writing a batch. In the future we would need
+Currently, we flush (too often) whenever we complete writing a batch. In the future we would need
 to flush *at least* before we commit.
 In case of an ongoing merge (two batches are currently being merged into one while we commit), we will ignore
 the new batch that is in the making and just record the batches that are currently being merged. This means 
@@ -336,10 +335,8 @@ Deleting a checkpoint involves two steps:
 The first two operations are trivial. Garbage collection of old batch files can be done by computing the 
 set difference of all available batch files (in the file-system) vs. 
 all files referenced by the available checkpoints (computed by reading the spine meta-data files).
-Note that the way we implement checkpoints allows us to only remove the oldest checkpoint at any given time,
-as removing a later checkpoint always runs at risk of not being able to restore older checkpoints.
 
-#### Restoring a given checkpoint
+#### Recovery Process
 
 In order to restore a given checkpoint, we added two configuration options which are given to the circuit
 on initialization (the storage location and the commit id).
